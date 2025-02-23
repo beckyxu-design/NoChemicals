@@ -1,44 +1,34 @@
-import { NextResponse } from "next/server";
-import OpenAI from "openai";
-import { nutrientClassification } from "@/lib/utils";
-import { config, validateEnv } from "@/lib/config";
+import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
+import { analysisStore } from '@/lib/store';
+import crypto from 'crypto';
 
-try {
-  validateEnv();
-} catch (error) {
-  console.error('Environment validation error:', error);
+interface Ingredient {
+  name: string;
+  classification: 'high_risk' | 'moderate_risk' | 'healthy';
+  explanation: string;
+}
+
+interface AnalysisResult {
+  ingredients: Array<{
+    name: string;
+    classification: string;
+    explanation: string;
+    papers: Array<{
+      title: string;
+      url: string;
+    }>;
+  }>;
 }
 
 const openai = new OpenAI({
-  apiKey: config.openai.apiKey,
-  dangerouslyAllowBrowser: true,
-  timeout: 30000,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-function extractJsonFromText(text: string): any {
-  try {
-    // Remove markdown code block markers if present
-    const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
-    
-    // Try to parse the entire text first
-    try {
-      return JSON.parse(cleanText);
-    } catch (e) {
-      console.log('Failed to parse entire text, trying to extract JSON object');
-    }
-
-    // If that fails, try to find JSON object in the text using regex
-    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-
-    console.error('No valid JSON found in text');
-    return null;
-  } catch (error) {
-    console.error('Failed to parse JSON:', error);
-    return null;
-  }
+function cleanJsonResponse(text: string): string {
+  // Remove markdown code block markers if present
+  const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
+  return cleaned;
 }
 
 async function searchPubMedPapers(ingredient: string): Promise<{ title: string; url: string }[]> {
@@ -51,36 +41,9 @@ async function searchPubMedPapers(ingredient: string): Promise<{ title: string; 
   }];
 }
 
-export async function POST(req: Request) {
+async function analyzeImage(base64Image: string): Promise<AnalysisResult> {
   try {
-    console.log('Starting image analysis...');
-    validateEnv();
-    
-    const formData = await req.formData();
-    const image = formData.get("image") as File;
-    console.log('Image received:', {
-      name: image?.name,
-      size: image?.size,
-      type: image?.type
-    });
-
-    if (!image) {
-      console.error('No image provided in request');
-      return NextResponse.json(
-        { error: "No image provided" },
-        { status: 400 }
-      );
-    }
-
-    console.log('Converting image to base64...');
-    const bytes = await image.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    const base64Image = buffer.toString('base64');
-    console.log('Image converted to base64, length:', base64Image.length);
-
-    // First API call: Extract text from image
-    console.log('Making first API call to extract text...');
-    const textExtractionResponse = await openai.chat.completions.create({
+    const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         {
@@ -88,93 +51,118 @@ export async function POST(req: Request) {
           content: [
             {
               type: "text",
-              text: "Read this nutrition label image and extract all the text content. Include all ingredients, nutrients, and their amounts. Output the text in a clear, readable format.",
+              text: `Analyze this nutrition label image and identify all ingredients. For each ingredient, classify it as 'high_risk', 'moderate_risk', or 'healthy' based on its potential health impacts. Also provide a brief one-sentence explanation of its health effects. Return the response in this exact JSON format without any markdown formatting:
+              {
+                "ingredients": [
+                  {
+                    "name": "ingredient name",
+                    "classification": "classification",
+                    "explanation": "brief explanation"
+                  }
+                ]
+              }`
             },
             {
               type: "image_url",
               image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-              },
-            },
-          ],
-        },
-      ],
-      max_tokens: 5000,
-    });
-
-    console.log('Text extraction response received');
-    const extractedText = textExtractionResponse.choices[0].message.content;
-    console.log('Extracted text:', extractedText);
-
-    // Second API call: Analyze the extracted text for cancer risks
-    console.log('Making second API call to analyze text...');
-    const analysisResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "user",
-          content: `Analyze these ingredients and classify each as high_risk, moderate_risk, or healthy. For each ingredient, provide a ONE sentence explanation about its health impact. Sort ingredients by risk level (high_risk first, then moderate_risk, then healthy). Return ONLY a JSON object with this structure: {"ingredients": [{"name": string, "classification": string, "explanation": string}]}.
-
-Here's the ingredients list from the nutrition label:
-${extractedText}`
+                url: base64Image
+              }
+            }
+          ]
         }
       ],
-      max_tokens: 5000,
+      max_tokens: 4096,
     });
 
-    console.log('Analysis response received');
-    const analysisText = analysisResponse.choices[0].message.content;
-    console.log('Analysis result:', analysisText);
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('No content in response');
+    }
 
-    // Parse the JSON from the response
-    const analysis = extractJsonFromText(analysisText);
-    if (!analysis) {
+    const cleanedContent = cleanJsonResponse(content);
+    
+    try {
+      const parsedResponse = JSON.parse(cleanedContent) as { ingredients: Ingredient[] };
+      
+      // Add PubMed papers for each ingredient
+      const ingredientsWithPapers = await Promise.all(
+        parsedResponse.ingredients.map(async (ingredient) => {
+          const papers = await searchPubMedPapers(ingredient.name);
+          return {
+            ...ingredient,
+            papers
+          };
+        })
+      );
+
+      return {
+        ingredients: ingredientsWithPapers
+      };
+    } catch {
+      console.error('Failed to parse response:', cleanedContent);
       throw new Error('Failed to parse analysis results');
     }
-
-    // Add PubMed papers for each ingredient
-    const ingredientsWithPapers = await Promise.all(
-      analysis.ingredients.map(async (ingredient) => {
-        const papers = await searchPubMedPapers(ingredient.name);
-        return {
-          ...ingredient,
-          papers
-        };
-      })
-    );
-
-    return NextResponse.json({ 
-      analysis: {
-        ...analysis,
-        ingredients: ingredientsWithPapers
-      },
-      extractedText,
-    });
   } catch (error) {
-    console.error("Error processing request:", error);
-    if (error instanceof Error) {
-      console.error('Error details:', {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      });
+    console.error('Error analyzing image:', error);
+    throw error;
+  }
+}
 
-      if ('response' in error) {
-        console.error('API Error Response:', {
-          // @ts-ignore
-          status: error.response?.status,
-          // @ts-ignore
-          statusText: error.response?.statusText,
-          // @ts-ignore
-          data: error.response?.data
+// Start analysis endpoint
+export async function POST(req: Request) {
+  try {
+    const formData = await req.formData();
+    const image = formData.get('image') as File;
+
+    if (!image) {
+      return NextResponse.json(
+        { error: 'No image provided' },
+        { status: 400 }
+      );
+    }
+
+    // Generate a unique ID for this analysis job
+    const jobId = crypto.randomUUID();
+    console.log('Creating new job:', jobId);
+    analysisStore.createJob(jobId);
+
+    // Start the analysis in the background
+    const bytes = await image.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const base64Image = `data:${image.type};base64,${buffer.toString('base64')}`;
+
+    // Update job status to processing
+    console.log('Starting analysis for job:', jobId);
+    analysisStore.updateJob(jobId, { status: 'processing' });
+
+    // Don't await the analysis, let it run in the background
+    (async () => {
+      try {
+        console.log('Running analysis for job:', jobId);
+        const result = await analyzeImage(base64Image);
+        console.log('Analysis completed for job:', jobId);
+        analysisStore.updateJob(jobId, { 
+          status: 'completed',
+          result,
+          timestamp: Date.now()
+        });
+      } catch (error) {
+        console.error('Analysis failed for job:', jobId, error);
+        analysisStore.updateJob(jobId, { 
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: Date.now()
         });
       }
-    }
+    })();
+
+    // Immediately return the job ID
+    return NextResponse.json({ jobId });
+
+  } catch (error) {
+    console.error('Error processing request:', error);
     return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : "Failed to analyze image",
-        details: process.env.NODE_ENV === 'development' ? String(error) : undefined
-      },
+      { error: 'Failed to start analysis' },
       { status: 500 }
     );
   }

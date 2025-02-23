@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import Skeleton from 'react-loading-skeleton';
 import 'react-loading-skeleton/dist/skeleton.css';
+import Image from 'next/image';
 
 interface Paper {
   title: string;
@@ -64,9 +65,11 @@ const LoadingSkeleton = () => (
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const calculateStats = (ingredients: Ingredient[]): SummaryStats => {
     return ingredients.reduce((acc, ingredient) => ({
@@ -77,6 +80,18 @@ export default function Home() {
     }), { total: 0, highRisk: 0, moderateRisk: 0, healthy: 0 });
   };
 
+  const handleSampleClick = async (sampleNumber: number) => {
+    try {
+      const response = await fetch(`/sample_pictures/sample_${sampleNumber}.png`);
+      const blob = await response.blob();
+      const file = new File([blob], `sample_${sampleNumber}.png`, { type: 'image/png' });
+      setFile(file);
+      handleUpload(file);
+    } catch (err) {
+      console.error('Error loading sample:', err);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
       setFile(e.target.files[0]);
@@ -84,38 +99,85 @@ export default function Home() {
     }
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setError('Please select an image first');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
+  const handleUpload = async (fileToUpload: File | null = null) => {
+    let pollInterval: NodeJS.Timeout;
 
     try {
-      const formData = new FormData();
-      formData.append('image', file);
+      setLoading(true);
+      setError(null);
+      setAnalysis(null);
+      
+      const uploadFile = fileToUpload || file;
+      if (!uploadFile) {
+        setError('Please select an image first');
+        setLoading(false);
+        return;
+      }
 
-      const response = await fetch('/api/analyze', {
+      const formData = new FormData();
+      formData.append('image', uploadFile);
+
+      // Start the analysis
+      const startResponse = await fetch('/api/analyze', {
         method: 'POST',
         body: formData,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to analyze image');
+      if (!startResponse.ok) {
+        const errorData = await startResponse.json();
+        throw new Error(errorData.error || 'Failed to start analysis');
       }
 
-      setAnalysis(data.analysis);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
-      setError(`Error: ${errorMessage}. Please check your API key and try again.`);
-      setAnalysis(null);
-    } finally {
+      const { jobId } = await startResponse.json();
+      
+      // Poll for results
+      pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(`/api/analyze/status?jobId=${jobId}`);
+          
+          if (statusResponse.status === 404) {
+            clearInterval(pollInterval);
+            setError('Analysis job not found - please try again');
+            setLoading(false);
+            return;
+          }
+
+          if (!statusResponse.ok) {
+            const errorData = await statusResponse.json();
+            throw new Error(errorData.error || 'Failed to check analysis status');
+          }
+
+          const job = await statusResponse.json();
+          
+          if (job.status === 'completed') {
+            clearInterval(pollInterval);
+            setAnalysis(job.result);
+            setLoading(false);
+          } else if (job.status === 'failed') {
+            clearInterval(pollInterval);
+            setError(job.error || 'Analysis failed');
+            setLoading(false);
+          }
+          // Continue polling if status is 'pending' or 'processing'
+        } catch (pollError) {
+          clearInterval(pollInterval);
+          setError(pollError instanceof Error ? pollError.message : 'Failed to check analysis status');
+          setLoading(false);
+        }
+      }, 2000); // Poll every 2 seconds
+
+    } catch (error) {
+      console.error('Error:', error);
+      setError(error instanceof Error ? error.message : 'Failed to analyze image');
       setLoading(false);
     }
+
+    // Clean up interval when component unmounts
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   };
 
   const getColorForClassification = (classification: string) => {
@@ -161,6 +223,22 @@ export default function Home() {
     return [...ingredients].sort((a, b) => getRiskLevel(b.classification) - getRiskLevel(a.classification));
   };
 
+  useEffect(() => {
+    // Clean up the old preview URL when component unmounts or file changes
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+    }
+  }, [file]);
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white p-8">
       <div className="max-w-5xl mx-auto">
@@ -173,29 +251,99 @@ export default function Home() {
           </p>
         </div>
         
+        {/* Sample Images Section */}
         <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-slate-100">
-          <div className="mb-6">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleFileChange}
-              className="block w-full text-sm text-slate-500
-                file:mr-4 file:py-3 file:px-6
-                file:rounded-full file:border-0
-                file:text-sm file:font-semibold
-                file:bg-slate-100 file:text-slate-700
-                hover:file:bg-slate-200
-                transition duration-150"
-            />
+          <h2 className="text-xl font-semibold text-slate-900 mb-4">Sample Labels</h2>
+          <p className="text-slate-600 mb-6">Click on any sample to analyze it:</p>
+          <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto">
+            <button 
+              onClick={() => handleSampleClick(1)}
+              className="text-left transition-transform hover:scale-105"
+            >
+              <Image 
+                src="/sample_pictures/sample_1.png"
+                alt="Sample Label 1"
+                width={300}
+                height={300}
+                priority
+                className="w-full h-48 object-contain rounded-lg border border-slate-200"
+              />
+              <p className="text-sm text-slate-500 text-center mt-2">Sample Label 1</p>
+            </button>
+            <button 
+              onClick={() => handleSampleClick(2)}
+              className="text-left transition-transform hover:scale-105"
+            >
+              <Image 
+                src="/sample_pictures/sample_2.png"
+                alt="Sample Label 2"
+                width={300}
+                height={300}
+                priority
+                className="w-full h-48 object-contain rounded-lg border border-slate-200"
+              />
+              <p className="text-sm text-slate-500 text-center mt-2">Sample Label 2</p>
+            </button>
+          </div>
+        </div>
+
+        {/* Upload Section */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-slate-100">
+          <div 
+            className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center hover:border-slate-300 transition-colors cursor-pointer relative"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {file && previewUrl ? (
+              <div className="mb-4">
+                <Image 
+                  src={previewUrl}
+                  alt="Selected image preview"
+                  width={300}
+                  height={300}
+                  className="max-h-48 mx-auto rounded-lg border border-slate-200 object-contain"
+                  unoptimized // Since we're using object URLs
+                />
+                <p className="text-sm text-slate-600 mt-2">Selected: {file.name}</p>
+              </div>
+            ) : (
+              <div className="mb-4">
+                <svg className="mx-auto h-12 w-12 text-slate-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                  <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            )}
+            <div className="flex text-sm text-slate-600 flex-col items-center">
+              <label
+                htmlFor="file-upload"
+                className="relative cursor-pointer rounded-md font-medium text-blue-600 hover:text-blue-500"
+              >
+                <span>{file ? 'Change image' : 'Upload a nutrition label'}</span>
+                <input
+                  id="file-upload"
+                  name="file-upload"
+                  type="file"
+                  ref={fileInputRef}
+                  className="sr-only"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                />
+              </label>
+              {!file && <p className="pl-1">or drag and drop</p>}
+            </div>
+            <p className="text-xs text-slate-500 mt-2">PNG, JPG, GIF up to 10MB</p>
           </div>
           
-          <Button
-            onClick={handleUpload}
-            disabled={!file || loading}
-            className={`w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-full transition duration-150 ${loading ? 'opacity-75' : ''}`}
-          >
-            {loading ? 'Analyzing Ingredients...' : 'Analyze Ingredients'}
-          </Button>
+          {file && (
+            <div className="mt-4">
+              <Button
+                onClick={() => handleUpload()}
+                disabled={loading}
+                className={`w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-full transition duration-150 ${loading ? 'opacity-75' : ''}`}
+              >
+                {loading ? 'Analyzing Ingredients...' : 'Analyze Ingredients'}
+              </Button>
+            </div>
+          )}
         </div>
 
         {error && (

@@ -34,6 +34,12 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 - Color-coded risk classification
 - Detailed explanations of harmful ingredients
 
+## Sample Images
+
+The application comes with sample nutrition label images in the `public/sample_pictures` directory:
+- `sample1.jpg`: Energy drink nutrition label
+- `sample2.jpg`: Supplement nutrition label
+
 ## Tech Stack
 
 - Next.js
