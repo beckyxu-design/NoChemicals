@@ -42,26 +42,20 @@ function extractJsonFromText(text: string): any {
 }
 
 async function searchPubMedPapers(ingredient: string): Promise<{ title: string; url: string }[]> {
-  try {
-    const response = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(ingredient + " health effects")}&retmax=2&format=json`);
-    const data = await response.json();
-    
-    if (!data.esearchresult?.idlist) {
-      return [];
+  // Simply return 2 search URLs for the ingredient
+  const searchTerm = encodeURIComponent(`${ingredient} health effects`);
+  const baseUrl = 'https://pubmed.ncbi.nlm.nih.gov/?term=';
+  
+  return [
+    {
+      title: `Research papers about ${ingredient} (General)`,
+      url: `${baseUrl}${searchTerm}`
+    },
+    {
+      title: `Health effects of ${ingredient} (Clinical Studies)`,
+      url: `${baseUrl}${searchTerm}+clinical+trial`
     }
-
-    const ids = data.esearchresult.idlist;
-    const summaryResponse = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&format=json`);
-    const summaryData = await summaryResponse.json();
-
-    return ids.map(id => ({
-      title: summaryData.result[id].title,
-      url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`
-    }));
-  } catch (error) {
-    console.error('Error fetching PubMed papers:', error);
-    return [];
-  }
+  ];
 }
 
 export async function POST(req: Request) {
