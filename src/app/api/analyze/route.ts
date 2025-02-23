@@ -51,6 +51,8 @@ async function analyzeImage(base64Image: string): Promise<AnalysisResult> {
           content: [
             {
               type: "text",
+              // alternative for text below: 
+              // text: 'Given the following ingredient list, identify any potentially harmful or toxic ingredients. For each ingredient, list alternative names (synonyms, E numbers, or IUPAC chemical names) used in labeling and research literature. Explain potential health risks associated with these ingredients.For each ingredient, classify it as 'high_risk', 'moderate_risk', or 'healthy' based on its potential health impacts. Return the response in this exact JSON format without any markdown formatting:          
               text: `Analyze this nutrition label image and identify all ingredients. For each ingredient, classify it as 'high_risk', 'moderate_risk', or 'healthy' based on its potential health impacts. Also provide a brief one-sentence explanation of its health effects. Return the response in this exact JSON format without any markdown formatting:
               {
                 "ingredients": [
