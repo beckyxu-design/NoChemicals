@@ -41,6 +41,29 @@ function extractJsonFromText(text: string): any {
   }
 }
 
+async function searchPubMedPapers(ingredient: string): Promise<{ title: string; url: string }[]> {
+  try {
+    const response = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(ingredient + " health effects")}&retmax=2&format=json`);
+    const data = await response.json();
+    
+    if (!data.esearchresult?.idlist) {
+      return [];
+    }
+
+    const ids = data.esearchresult.idlist;
+    const summaryResponse = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&format=json`);
+    const summaryData = await summaryResponse.json();
+
+    return ids.map(id => ({
+      title: summaryData.result[id].title,
+      url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`
+    }));
+  } catch (error) {
+    console.error('Error fetching PubMed papers:', error);
+    return [];
+  }
+}
+
 export async function POST(req: Request) {
   try {
     console.log('Starting image analysis...');
@@ -103,7 +126,7 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `Analyze these ingredients and classify each as high_risk, moderate_risk, or healthy. For each ingredient, provide a ONE sentence explanation about its health impact. Return ONLY a JSON object with this structure: {"ingredients": [{"name": string, "classification": string, "explanation": string}]}.
+          content: `Analyze these ingredients and classify each as high_risk, moderate_risk, or healthy. For each ingredient, provide a ONE sentence explanation about its health impact. Sort ingredients by risk level (high_risk first, then moderate_risk, then healthy). Return ONLY a JSON object with this structure: {"ingredients": [{"name": string, "classification": string, "explanation": string}]}.
 
 Here's the ingredients list from the nutrition label:
 ${extractedText}`
@@ -122,8 +145,22 @@ ${extractedText}`
       throw new Error('Failed to parse analysis results');
     }
 
+    // Add PubMed papers for each ingredient
+    const ingredientsWithPapers = await Promise.all(
+      analysis.ingredients.map(async (ingredient) => {
+        const papers = await searchPubMedPapers(ingredient.name);
+        return {
+          ...ingredient,
+          papers
+        };
+      })
+    );
+
     return NextResponse.json({ 
-      analysis,
+      analysis: {
+        ...analysis,
+        ingredients: ingredientsWithPapers
+      },
       extractedText,
     });
   } catch (error) {
@@ -135,7 +172,6 @@ ${extractedText}`
         stack: error.stack,
       });
 
-      // Log the error response if it's an API error
       if ('response' in error) {
         console.error('API Error Response:', {
           // @ts-ignore

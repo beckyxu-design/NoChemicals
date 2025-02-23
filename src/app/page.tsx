@@ -3,10 +3,16 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 
+interface Paper {
+  title: string;
+  url: string;
+}
+
 interface Ingredient {
   name: string;
   classification: 'high_risk' | 'moderate_risk' | 'healthy';
   explanation: string;
+  papers: Paper[];
 }
 
 interface AnalysisResponse {
@@ -99,6 +105,23 @@ export default function Home() {
     }
   };
 
+  const getRiskLevel = (classification: string): number => {
+    switch (classification) {
+      case 'high_risk':
+        return 3;
+      case 'moderate_risk':
+        return 2;
+      case 'healthy':
+        return 1;
+      default:
+        return 0;
+    }
+  };
+
+  const sortByRisk = (ingredients: Ingredient[]) => {
+    return [...ingredients].sort((a, b) => getRiskLevel(b.classification) - getRiskLevel(a.classification));
+  };
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-green-50 to-blue-50 p-8">
       <div className="max-w-4xl mx-auto">
@@ -141,15 +164,34 @@ export default function Home() {
         {analysis?.ingredients && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4">
-              {analysis.ingredients.map((item, index) => (
+              {sortByRisk(analysis.ingredients).map((item, index) => (
                 <div
                   key={index}
                   className={`p-6 rounded-lg border ${getColorForClassification(item.classification)} transition-all duration-150 hover:shadow-md`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                    <div>
+                    <div className="flex-1">
                       <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
-                      <p className="text-gray-600 text-sm">{item.explanation}</p>
+                      <p className="text-gray-600 text-sm mb-3">{item.explanation}</p>
+                      {item.papers?.length > 0 && (
+                        <div className="mt-2">
+                          <p className="text-sm font-medium text-gray-700 mb-1">📚 Research Papers:</p>
+                          <ul className="space-y-1">
+                            {item.papers.map((paper, idx) => (
+                              <li key={idx}>
+                                <a
+                                  href={paper.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                                >
+                                  {paper.title}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                     <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getBadgeColorForClassification(item.classification)}`}>
                       {item.classification.replace('_', ' ')}
