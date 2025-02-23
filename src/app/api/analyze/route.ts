@@ -42,20 +42,13 @@ function extractJsonFromText(text: string): any {
 }
 
 async function searchPubMedPapers(ingredient: string): Promise<{ title: string; url: string }[]> {
-  // Simply return 2 search URLs for the ingredient
-  const searchTerm = encodeURIComponent(`${ingredient} health effects`);
+  const searchTerm = encodeURIComponent(ingredient);
   const baseUrl = 'https://pubmed.ncbi.nlm.nih.gov/?term=';
   
-  return [
-    {
-      title: `Research papers about ${ingredient} (General)`,
-      url: `${baseUrl}${searchTerm}`
-    },
-    {
-      title: `Health effects of ${ingredient} (Clinical Studies)`,
-      url: `${baseUrl}${searchTerm}+clinical+trial`
-    }
-  ];
+  return [{
+    title: `Research about ${ingredient}`,
+    url: `${baseUrl}${searchTerm}`
+  }];
 }
 
 export async function POST(req: Request) {
